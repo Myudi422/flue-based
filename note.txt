@@ -25,6 +25,8 @@ source myenv/bin/activate
 python --version  # Akan menampilkan Python 3.12
 pip --version
 
+token github : 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
+git clone https://Myudi422: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@github.com/Myudi422/flue-based.git
 
 - admin upload
 - backup auto telegram
