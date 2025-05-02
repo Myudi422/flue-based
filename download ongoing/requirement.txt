@@ -1,0 +1,6 @@
+fastapi
+httpx
+boto3
+python-magic
+mysql-connector-python
+fastapi-corsmiddleware
