@@ -3,6 +3,29 @@ Pythonscript ada apa aja :
 nanti diseatukan dulu pakai myenv python 3.12 dl baru install semua depensasi dari admin
 lalu install semua pakai tmux
 
+sudo apt update
+sudo apt install software-properties-common
+sudo add-apt-repository ppa:deadsnakes/ppa
+sudo apt update
+sudo apt install python3.12 python3.12-dev
+
+Menggunakan Virtual Environment untuk Isolasi:
+
+# Pindah ke direktori proyek kamu (misalnya, ~/Projects/proyek_ongoing)
+cd ~/Projects/proyek_ongoing
+
+# Buat virtual environment dengan nama "myenv" menggunakan Python 3.12
+python3.12 -m venv myenv
+
+# Aktifkan virtual environment
+source myenv/bin/activate
+
+# Sekarang, semua perintah 'python' atau 'pip' yang kamu jalankan
+# akan mengacu pada Python 3.12 dan paket-paket di dalam 'myenv'
+python --version  # Akan menampilkan Python 3.12
+pip --version
+
+
 - admin upload
 - backup auto telegram
 - downloader ongoing
