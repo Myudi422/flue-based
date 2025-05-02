@@ -10,4 +10,8 @@ lalu install semua pakai tmux
 - Ongoing anime & list episode : https://github.com/Myudi422/ongoing | main.py | gunicorn -w 4 -b 0.0.0.0:5000 main:app
 - RSS
 
+ini untuk python ongoing api
+ gunicorn -w 4 -b 0.0.0.0:5000 --max-requests 1000 --max-requests-jitter 50 main:app
+
+
 
