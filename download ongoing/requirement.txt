@@ -3,4 +3,8 @@ httpx
 boto3
 python-magic
 mysql-connector-python
-uvicorn
+fastapi-corsmiddleware
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+requests
