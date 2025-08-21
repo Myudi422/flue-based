@@ -11,6 +11,10 @@ import mysql.connector
 from fastapi.middleware.cors import CORSMiddleware
 import threading
 from functools import lru_cache
+import json
+from google.auth.transport.requests import Request
+from google.oauth2 import service_account
+import requests
 
 # Global variable untuk menyimpan log episode yang gagal diproses
 failed_logs = []
@@ -86,6 +90,118 @@ RESOLUTION_LIST = ["480p"]
 # API URL dasar
 API_INFO_URL = "http://api.flue.my.id:5000/episode/?data={}"
 API_VIEW_URL = "http://api.flue.my.id:5000/api/otakudesu/view/?data={}"
+
+# Path ke service account untuk FCM
+SERVICE_ACCOUNT_PATH = 'client.json'
+FCM_PROJECT_ID = 'niflex-79a03'
+
+# --- FUNGSI NOTIFIKASI FCM ---
+
+def get_access_token():
+    """Mendapatkan access token untuk FCM menggunakan service account."""
+    try:
+        credentials = service_account.Credentials.from_service_account_file(
+            SERVICE_ACCOUNT_PATH,
+            scopes=['https://www.googleapis.com/auth/firebase.messaging']
+        )
+        credentials.refresh(Request())
+        return credentials.token
+    except Exception as e:
+        print(f"Error mendapatkan access token: {e}")
+        return None
+
+def send_notification(fcm_token, title, message):
+    """Mengirim notifikasi FCM kepada user."""
+    try:
+        access_token = get_access_token()
+        if not access_token:
+            print("Gagal mendapatkan access token")
+            return False
+            
+        url = f'https://fcm.googleapis.com/v1/projects/{FCM_PROJECT_ID}/messages:send'
+        
+        headers = {
+            'Authorization': f'Bearer {access_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        payload = {
+            'message': {
+                'token': fcm_token,
+                'notification': {
+                    'title': title,
+                    'body': message
+                }
+            }
+        }
+        
+        response = requests.post(url, headers=headers, json=payload)
+        
+        if response.status_code == 200:
+            print(f"Notifikasi berhasil dikirim: {message}")
+            return True
+        else:
+            print(f"Gagal mengirim notifikasi: {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"Error saat mengirim notifikasi: {e}")
+        return False
+
+def get_anime_notification_users(anime_id):
+    """Mendapatkan daftar user yang ingin mendapat notifikasi untuk anime tertentu."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        query = """
+        SELECT DISTINCT uw.telegram_id, uw.first_name, uw.fcm_token
+        FROM notif_anime na
+        JOIN users_web uw ON na.telegram_id = uw.telegram_id
+        WHERE na.anime_id = %s AND uw.fcm_token IS NOT NULL AND uw.fcm_token != ''
+        """
+        
+        cursor.execute(query, (anime_id,))
+        users = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        return users
+        
+    except Exception as e:
+        print(f"Error mendapatkan daftar user notifikasi: {e}")
+        return []
+
+def send_episode_notification(anime_id, episode_number, anime_title):
+    """Mengirim notifikasi ke semua user yang mendaftar untuk anime tertentu."""
+    try:
+        users = get_anime_notification_users(anime_id)
+        
+        if not users:
+            print(f"Tidak ada user yang mendaftar notifikasi untuk anime_id {anime_id}")
+            return
+            
+        print(f"Mengirim notifikasi episode {episode_number} dari {anime_title} ke {len(users)} user(s)")
+        
+        title = "Episode Baru Tersedia! 🎉"
+        
+        for user in users:
+            first_name = user['first_name'] or 'User'
+            fcm_token = user['fcm_token']
+            
+            message = f"Hai {first_name}! Episode {episode_number} dari {anime_title} sudah tersedia untuk ditonton! 🍿✨"
+            
+            success = send_notification(fcm_token, title, message)
+            if success:
+                print(f"Notifikasi berhasil dikirim ke {first_name} (telegram_id: {user['telegram_id']})")
+            else:
+                print(f"Gagal mengirim notifikasi ke {first_name} (telegram_id: {user['telegram_id']})")
+            
+            # Delay kecil untuk menghindari rate limiting
+            sleep(0.5)
+            
+    except Exception as e:
+        print(f"Error saat mengirim notifikasi episode: {e}")
 
 # --- UTILITAS LOCK ---
 
@@ -239,6 +355,19 @@ def process_series(anime_id, series_slug, s3_client):
         return
 
     episodes = info_data["data"]["data_episode"]
+    
+    # Get anime title from anilist_data table
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT judul FROM anilist_data WHERE anime_id = %s", (anime_id,))
+        anime_data = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        anime_title = anime_data['judul'] if anime_data and anime_data['judul'] else "Unknown Anime"
+    except Exception as e:
+        print(f"Error mengambil judul anime dari database: {e}")
+        anime_title = "Unknown Anime"
 
     # --- Cek seluruh episode untuk melihat resolusi yang belum ada di DB ---
     tasks_by_ep = {}
@@ -330,6 +459,15 @@ def process_series(anime_id, series_slug, s3_client):
             try:
                 insert_episode(anime_id, episode_number, new_title, video_url, res)
                 print(f"Data episode {episode_number} (resolusi {res}) untuk anime_id {anime_id} telah disimpan.")
+                
+                # Kirim notifikasi ke user yang mendaftar untuk anime ini
+                # Hanya kirim notifikasi untuk resolusi pertama yang berhasil (480p/en)
+                if res == "480p":
+                    try:
+                        send_episode_notification(anime_id, episode_number, anime_title)
+                    except Exception as notif_error:
+                        print(f"Error saat mengirim notifikasi untuk anime_id {anime_id}, episode {episode_number}: {notif_error}")
+                        
             except Exception as e:
                 err_msg = f"Error memasukkan data ke DB untuk episode {ep_id} resolusi {res}: {e}"
                 print(err_msg)
@@ -412,6 +550,50 @@ async def get_failed_logs():
     Hasilnya berupa daftar log error terbaru (tanpa duplikasi).
     """
     return {"failed_logs": failed_logs}
+
+@app.get("/notif-users/{anime_id}")
+async def get_notification_users(anime_id: int):
+    """
+    Endpoint untuk melihat daftar user yang mendaftar notifikasi untuk anime tertentu.
+    """
+    users = get_anime_notification_users(anime_id)
+    return {
+        "anime_id": anime_id,
+        "notification_users": users,
+        "total_users": len(users)
+    }
+
+@app.post("/test-notification")
+async def test_notification(anime_id: int, episode_number: int):
+    """
+    Endpoint untuk menguji sistem notifikasi secara manual.
+    """
+    try:
+        # Ambil judul anime dari tabel anilist_data
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT judul FROM anilist_data WHERE anime_id = %s", (anime_id,))
+        anime_data = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if not anime_data:
+            raise HTTPException(status_code=404, detail=f"Anime dengan ID {anime_id} tidak ditemukan")
+            
+        anime_title = anime_data['judul'] or "Unknown Anime"
+        
+        # Kirim notifikasi test
+        send_episode_notification(anime_id, episode_number, anime_title)
+        
+        return {
+            "message": f"Test notifikasi berhasil dikirim untuk {anime_title} episode {episode_number}",
+            "anime_id": anime_id,
+            "anime_title": anime_title,
+            "episode_number": episode_number
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saat mengirim test notifikasi: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
